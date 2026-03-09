@@ -2,12 +2,12 @@ import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.chains import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 
 # Only needed for the LLM reasoning now!
-os.environ["GOOGLE_API_KEY"] = "AIzaSyAsbnQS1fPSwKy8ayZQvkdvKcL-cvRbGr0" 
+os.environ["GOOGLE_API_KEY"] = "AIzaSyB9yFvf598dHn_OJ-5VJ-C_VXc-eyGsXok" 
 
 class SemanticSniperAgent:
     def __init__(self):
