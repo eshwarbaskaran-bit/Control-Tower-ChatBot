@@ -1,5 +1,24 @@
 import os
 from dotenv import load_dotenv
+
+# ─────────────────────────────────────────────
+# LangSmith — must be set BEFORE any LangChain import
+# ─────────────────────────────────────────────
+load_dotenv(override=True)
+
+# ── Validate required keys early — fail loud, not silently ───────────────────
+_REQUIRED = ["GOOGLE_API_KEY", "DATABASE_URL"]
+_missing = [k for k in _REQUIRED if not os.getenv(k)]
+if _missing:
+    raise EnvironmentError(
+        f"❌ Missing required environment variables: {', '.join(_missing)}\n"
+        "Please fill in all values in your .env file."
+    )
+
+os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "false")
+os.environ["LANGCHAIN_API_KEY"]     = os.getenv("LANGCHAIN_API_KEY", "")
+os.environ["LANGCHAIN_PROJECT"]     = os.getenv("LANGCHAIN_PROJECT", "control-tower-bot")
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres import PGVector
@@ -9,78 +28,94 @@ from langchain_core.prompts import ChatPromptTemplate
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine
 
-# 1. Load secrets securely
-load_dotenv()
-
 class SemanticSniperAgent:
     def __init__(self, is_async=False):
         print("🧠 [LOCAL]: Loading HuggingFace Semantic Model...")
-        self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-        
-        print(f"💾 [DB]: Connecting to PostgreSQL... (Async Mode: {is_async})")
-        CONNECTION_STRING = "postgresql+psycopg://admin:clickpost123@localhost:5432/ct_copilot"
-        
-        # 2. THE FIX: Choose the right engine based on the environment
+
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-base-en-v1.5",
+            encode_kwargs={"normalize_embeddings": True},
+        )
+
+        print(f"💾 [DB]: Connecting to PostgreSQL... (Async: {is_async})")
+        CONNECTION_STRING = os.environ["DATABASE_URL"]
+
         if is_async:
+            # Note: Depending on your python environment, async might require the +asyncpg driver
+            if not CONNECTION_STRING.startswith("postgresql+"):
+                CONNECTION_STRING = CONNECTION_STRING.replace("postgresql://", "postgresql+asyncpg://")
             self.engine = create_async_engine(CONNECTION_STRING)
         else:
+            if "+asyncpg" in CONNECTION_STRING:
+                CONNECTION_STRING = CONNECTION_STRING.replace("+asyncpg", "")
             self.engine = create_engine(CONNECTION_STRING)
-            
+
         self.vector_db = PGVector(
             embeddings=self.embeddings,
             collection_name="control_tower_docs",
             connection=self.engine,
-            use_jsonb=True,
+            use_jsonb=True,create_extension=False,
         )
 
-        # 3. Setup LLM & Retriever
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
+        # ── LLM ──────────────────────────────────────────────────────────────
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            temperature=0.0,
+            max_retries=3,
+        )
+
+        # ── Retriever ────────────────────────────────────────────────────────
         self.retriever = self.vector_db.as_retriever(
-            search_type="mmr", 
-            search_kwargs={'k': 4, 'fetch_k': 20}
+            search_type="mmr",
+            search_kwargs={"k": 6, "fetch_k": 30, "lambda_mult": 0.6},
         )
 
-        # 4. The Professional Architect Prompt
-        system_prompt = (
-            "# Role\n"
-            "- You are a Senior Product Operations Analyst working at ClickPost.\n"
-            "- Your objective is to explain Control Tower and logistics logic with extreme brevity.\n"
-            "- Bridge the gap between system logic and physical operations using short, punchy statements.\n\n"
-            "---\n\n"
-            "# Guiding Principle\n"
-            "Synthesize the context into a maximum of 3 to 4 concise bullet points. Never regurgitate raw text. Combine the 'What', 'Why', and 'Action' seamlessly into natural sentences. Do not use introductory fluff or output bolded subheadings.\n\n"
-            "---\n\n"
-            "<GUARDRAILS & STRICT BOUNDARIES>\n"
-            "1. ZERO HALLUCINATION: Only use the provided `CONTEXT`. Do not invent features or logic.\n"
-            "2. NO FORMATTING FLUFF: NEVER output headings like 'Underlying Logic', 'Physical Reality', or 'Action'. Output ONLY a single list of 3-4 bullet points.\n"
-            "3. OUT OF SCOPE REJECTION: Refuse to answer anything unrelated to ClickPost or logistics.\n"
-            "</GUARDRAILS & STRICT BOUNDARIES>\n\n"
-            "---\n\n"
-            "CONTEXT:\n{context}"
-        )
+        # ── Prompt ───────────────────────────────────────────────────────────
+        system_prompt = """
+# Role
+You are a Senior Product Operations Analyst at ClickPost with deep expertise in Control Tower.
+
+# Dashboard Routing (use ONLY if context confirms the dashboard name)
+- Q-Commerce / Rider / ETA / Dark Store → Quick Commerce dashboard
+- Reverse / RTO / Return               → Reverse Movement dashboard  
+- Forward / Delivery / PDD / Stuck     → Forward Movement dashboard
+If context gives a different name, use the context name — not this table.
+
+# Response Style
+- DEFINITIONS ("What is X?"): 3–4 bullets, logic + business impact.
+- NAVIGATION ("How do I check X?"): Numbered steps, EXACT widget/dashboard names from CONTEXT only.
+- ALERTS ("How do I set up alert for X?"): Extract all config fields from CONTEXT. Combine across chunks intelligently. Never use placeholders.
+- COMPARISONS: Answer directly, clarify nuances.
+
+# Hard Rules
+1. NEVER invent info not in CONTEXT. Say "not in my knowledge base" if missing.
+2. NEVER output placeholders — use real values or admit you don't have them.
+3. No preamble. Answer on line 1.
+4. Refuse non-ClickPost questions.
+
+---
+CONTEXT:
+{context}
+"""
         prompt_template = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             ("human", "{input}"),
         ])
 
-        # 5. Build the Chain
         document_chain = create_stuff_documents_chain(self.llm, prompt_template)
         self.retrieval_chain = create_retrieval_chain(self.retriever, document_chain)
 
-    # Synchronous call for Terminal/FastAPI
-    def ask(self, query):
+    def ask(self, query: str) -> str:
         response = self.retrieval_chain.invoke({"input": query})
         return response["answer"]
 
-    # Asynchronous call for Chainlit
-    async def aask(self, query):
+    async def aask(self, query: str) -> str:
         response = await self.retrieval_chain.ainvoke({"input": query})
         return response["answer"]
 
-# Terminal test
 if __name__ == "__main__":
     bot = SemanticSniperAgent(is_async=False)
     question = "What is pending pickup?"
     print(f"\n👤 USER: {question}\n")
     answer = bot.ask(question)
-    print(f"🎯 SEMANTIC RESPONSE:\n{answer}")
+    print(f"🎯 RESPONSE:\n{answer}")

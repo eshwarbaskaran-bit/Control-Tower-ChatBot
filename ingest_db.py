@@ -1,41 +1,85 @@
 import os
+from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres import PGVector
 from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_experimental.text_splitter import SemanticChunker
 
-# 1. The Database Connection String
-# Format: postgresql+psycopg://username:password@host:port/database_name
-CONNECTION_STRING = "postgresql+psycopg://admin:clickpost123@localhost:5432/ct_copilot"
+load_dotenv()
 
-# 2. Define the exact same Embedding Model you used before
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+if not os.getenv("DATABASE_URL"):
+    raise EnvironmentError("❌ DATABASE_URL not set. Copy .env.template → .env first.")
+
+CONNECTION_STRING = os.environ["DATABASE_URL"]
+
+# ── Embedding model ───────────────────────────────────────────────────────────
+# MUST match agent.py — if you change this, re-ingest everything
+embeddings = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-base-en-v1.5",
+    encode_kwargs={"normalize_embeddings": True},
+)
+
 
 def migrate_to_postgres():
-    print("🚀 Booting up Postgres Ingestion...")
+    print("🚀 Booting up Postgres Ingestion with Semantic Chunking...")
 
-    # 3. Load your documentation (Make sure data.txt is in your folder!)
+    # ── Load raw docs ─────────────────────────────────────────────────────────
     loader = TextLoader("data.txt", encoding="utf-8")
     docs = loader.load()
+    print(f"📄 Loaded {len(docs)} document(s).")
 
-    # 4. Chunk the text exactly like we did for FAISS
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    # ── Semantic Chunker ──────────────────────────────────────────────────────
+    # How it works:
+    #   1. Splits the text into sentences first.
+    #   2. Embeds each sentence using the SAME embedding model as retrieval.
+    #   3. Computes cosine similarity between consecutive sentences.
+    #   4. When similarity drops sharply (topic shift), it starts a new chunk.
+    #   Result: each chunk is topically coherent — "Pending Pickup" logic won't
+    #   bleed into "Stuck at Hub" logic just because of character limits.
+    #
+    # breakpoint_threshold_type options:
+    #   "percentile"         — split when similarity drops below the Nth percentile
+    #                          of all sentence-pair similarities in the document.
+    #                          Best default for structured KB docs.
+    #   "standard_deviation" — split when drop exceeds 1 std dev below mean.
+    #                          Better for very long, varied documents.
+    #   "interquartile"      — uses IQR, more robust to outliers.
+    #
+    # For a structured logistics KB, "percentile" at 85 gives clean concept-level
+    # chunks. Tune breakpoint_threshold_amount after inspecting the sample output.
+    text_splitter = SemanticChunker(
+        embeddings=embeddings,
+        breakpoint_threshold_type="percentile",
+        breakpoint_threshold_amount=70,  # higher = fewer, larger chunks
+                                          # lower  = more, tighter chunks
+    )
+
     chunks = text_splitter.split_documents(docs)
-    
-    print(f"📦 Extracted {len(chunks)} chunks from the documentation.")
-    print("🧠 Generating embeddings and writing to PostgreSQL. This might take a minute...")
 
-    # 5. Push directly to PostgreSQL
-    # This automatically creates the tables and vector indexes if they don't exist
-    vectorstore = PGVector.from_documents(
+    print(f"📦 Semantic chunker produced {len(chunks)} chunks.")
+
+    # ── Sanity check: print first 3 chunks so you can verify quality ─────────
+    print("\n── Sample Chunks (first 3) ──────────────────────────────────────")
+    for i, chunk in enumerate(chunks[:3]):
+        print(f"\n[Chunk {i+1}] ({len(chunk.page_content)} chars)")
+        print(chunk.page_content[:300])
+        print("...")
+    print("─────────────────────────────────────────────────────────────────\n")
+
+    print("🧠 Generating BGE embeddings → PostgreSQL...")
+
+    PGVector.from_documents(
         embedding=embeddings,
         documents=chunks,
         collection_name="control_tower_docs",
         connection=CONNECTION_STRING,
         use_jsonb=True,
+        pre_delete_collection=True,  # wipe old vectors before re-ingesting
     )
 
-    print("✅ Migration Complete! Your AI brain is now running on PostgreSQL.")
+    print(f"✅ Ingestion complete. {len(chunks)} semantic chunks stored.")
+    print("💡 If chunk quality looks off, tune breakpoint_threshold_amount (try 75–90).")
+
 
 if __name__ == "__main__":
     migrate_to_postgres()
