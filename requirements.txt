@@ -1,0 +1,13 @@
+chainlit
+langchain
+langchain-groq
+langchain-postgres
+langchain-huggingface
+langchain-experimental
+langchain-community
+langchain-classic
+asyncpg
+python-dotenv
+sentence-transformers
+psycopg[binary,pool]
+aiosqlite

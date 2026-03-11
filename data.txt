@@ -15,7 +15,7 @@ Navigation path: Home > Control Tower > [Forward / Reverse / RTO / Quick Commerc
 The Control Tower has a three-tier page structure:
 - Landing Page: High-level KPIs and charts for quick scanning.
 - Intermediate Page: Breakdowns by courier, warehouse, region, or delivery attempt for diagnosis.
-- Dump Page: Granular AWB-level data for direct action and export.
+- Dump Page: Granular AWB-level data for direct action and export. Reports can be downloaded and sent directly to your email. Data can be visualized as Shipment Count, Invoice Value, or Quantity using the toggle on the dump page.
 
 Data refreshes every 15 minutes. The system supports 20 concurrent users per brand and retains data for 90 days.
 
@@ -509,7 +509,7 @@ Step 1 — Select Context (MANDATORY fields):
 Step 2 — Select Alert Mode (MANDATORY):
 - Choose ONE mode only — you cannot select both simultaneously.
 - Instant Alert: Event-driven — fires immediately when a shipment enters the bucket or threshold is exceeded.
-- Scheduled Alert: Time-driven — fires at a fixed time. Set timing to Hourly, Daily, or a Custom time (e.g., every day at 9 AM).
+- Scheduled Alert: Time-driven — fires at a fixed time. Set timing to: Hourly, Daily, Alternate Days, Weekdays only (Monday to Friday), or a Custom time (e.g., every day at 9 AM).
 
 Step 3 — Define Trigger Logic (optional refinements):
 - Configure when the alert fires:

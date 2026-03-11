@@ -1,13 +1,14 @@
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 # ─────────────────────────────────────────────
 # LangSmith — must be set BEFORE any LangChain import
 # ─────────────────────────────────────────────
-load_dotenv(override=True)
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
 # ── Validate required keys early — fail loud, not silently ───────────────────
-_REQUIRED = ["GOOGLE_API_KEY", "DATABASE_URL"]
+_REQUIRED = ["GROQ_API_KEY", "DATABASE_URL"]
 _missing = [k for k in _REQUIRED if not os.getenv(k)]
 if _missing:
     raise EnvironmentError(
@@ -19,7 +20,7 @@ os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "false")
 os.environ["LANGCHAIN_API_KEY"]     = os.getenv("LANGCHAIN_API_KEY", "")
 os.environ["LANGCHAIN_PROJECT"]     = os.getenv("LANGCHAIN_PROJECT", "control-tower-bot")
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres import PGVector
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
@@ -27,6 +28,7 @@ from langchain_classic.chains import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine
+
 
 class SemanticSniperAgent:
     def __init__(self, is_async=False):
@@ -41,7 +43,6 @@ class SemanticSniperAgent:
         CONNECTION_STRING = os.environ["DATABASE_URL"]
 
         if is_async:
-            # Note: Depending on your python environment, async might require the +asyncpg driver
             if not CONNECTION_STRING.startswith("postgresql+"):
                 CONNECTION_STRING = CONNECTION_STRING.replace("postgresql://", "postgresql+asyncpg://")
             self.engine = create_async_engine(CONNECTION_STRING)
@@ -54,14 +55,16 @@ class SemanticSniperAgent:
             embeddings=self.embeddings,
             collection_name="control_tower_docs",
             connection=self.engine,
-            use_jsonb=True,create_extension=False,
+            use_jsonb=True,
+            create_extension=False,
         )
 
         # ── LLM ──────────────────────────────────────────────────────────────
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+        self.llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
             temperature=0.0,
             max_retries=3,
+            api_key=os.environ["GROQ_API_KEY"],
         )
 
         # ── Retriever ────────────────────────────────────────────────────────
@@ -112,6 +115,7 @@ CONTEXT:
     async def aask(self, query: str) -> str:
         response = await self.retrieval_chain.ainvoke({"input": query})
         return response["answer"]
+
 
 if __name__ == "__main__":
     bot = SemanticSniperAgent(is_async=False)
