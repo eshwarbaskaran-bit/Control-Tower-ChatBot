@@ -14,7 +14,7 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
 import chainlit as cl
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
-from agent import SemanticSniperAgent
+from agent_render import SemanticSniperAgent
 
 
 # ─────────────────────────────────────────────────────────────────────────────
