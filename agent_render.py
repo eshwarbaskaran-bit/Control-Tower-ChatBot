@@ -8,7 +8,7 @@ from pathlib import Path
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
 # ── Validate required keys early — fail loud, not silently ───────────────────
-_REQUIRED = ["GROQ_API_KEY", "DATABASE_URL"]
+_REQUIRED = ["GROQ_API_KEY", "BOT_DB_URL"]
 _missing = [k for k in _REQUIRED if not os.getenv(k)]
 if _missing:
     raise EnvironmentError(
@@ -41,7 +41,7 @@ class SemanticSniperAgent:
         )
 
         print(f"💾 [DB]: Connecting to PostgreSQL... (Async: {is_async})")
-        CONNECTION_STRING = os.environ["DATABASE_URL"]
+        CONNECTION_STRING = os.environ["BOT_DB_URL"]
 
         if is_async:
             if not CONNECTION_STRING.startswith("postgresql+"):

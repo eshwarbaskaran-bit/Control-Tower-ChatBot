@@ -13,22 +13,11 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
 import chainlit as cl
-from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from agent_render import SemanticSniperAgent
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Chainlit Data Layer — persists chat threads to SQLite locally
-# Fixes "Error fetching threads" on startup
-# ─────────────────────────────────────────────────────────────────────────────
-@cl.data_layer
-def get_data_layer():
-    return SQLAlchemyDataLayer(conninfo="sqlite+aiosqlite:///chainlit_history.db")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Auth — single shared login for internal team
-# Change USERNAME / PASSWORD before deploying
 # ─────────────────────────────────────────────────────────────────────────────
 USERNAME = "clickpost"
 PASSWORD = "ct2025"
@@ -44,14 +33,11 @@ def auth_callback(username: str, password: str):
 # Supabase feedback writer
 # ─────────────────────────────────────────────────────────────────────────────
 async def write_feedback(rating: str, comment: str | None):
-    """Write one feedback row to ct_feedback in Supabase."""
-    raw_url = os.environ.get("DATABASE_URL", "")
-    # asyncpg needs plain postgresql:// — strip driver prefix and sslmode param
+    raw_url = os.environ.get("SUPABASE_FEEDBACK_URL", "")
     if "://" in raw_url:
         pg_url = "postgresql://" + raw_url.split("://", 1)[1]
     else:
         pg_url = raw_url
-    # asyncpg handles SSL via connect() arg, not DSN param
     pg_url = pg_url.replace("?sslmode=require", "").replace("&sslmode=require", "")
 
     try:
@@ -71,6 +57,7 @@ async def write_feedback(rating: str, comment: str | None):
             cl.context.session.id,
         )
         await conn.close()
+        print(f"[Feedback] ✅ Written to Supabase: {rating}")
     except Exception as e:
         print(f"[Feedback] DB write failed: {e}")
 
@@ -103,9 +90,6 @@ async def on_chat_start():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # On Message
-# Two responsibilities:
-#   1. If awaiting feedback comment — capture it, save to Supabase, return early
-#   2. Otherwise — run the bot and show 👍 👎 buttons
 # ─────────────────────────────────────────────────────────────────────────────
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -142,7 +126,6 @@ async def on_message(message: cl.Message):
     msg.content = answer
     await msg.update()
 
-    # Store for feedback attribution
     cl.user_session.set("last_question", message.content)
     cl.user_session.set("last_answer", answer)
 
@@ -150,14 +133,22 @@ async def on_message(message: cl.Message):
     await cl.Message(
         content="Was this helpful?",
         actions=[
-            cl.Action(name="feedback_positive", label="👍  Yes", value="positive"),
-            cl.Action(name="feedback_negative", label="👎  No",  value="negative"),
+            cl.Action(
+                name="feedback_positive",
+                payload={"rating": "positive"},
+                label="👍  Yes",
+            ),
+            cl.Action(
+                name="feedback_negative",
+                payload={"rating": "negative"},
+                label="👎  No",
+            ),
         ],
     ).send()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Feedback: Positive — silently log and confirm
+# Feedback: Positive
 # ─────────────────────────────────────────────────────────────────────────────
 @cl.action_callback("feedback_positive")
 async def on_positive(action: cl.Action):
@@ -167,7 +158,7 @@ async def on_positive(action: cl.Action):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Feedback: Negative — ask for free text comment
+# Feedback: Negative
 # ─────────────────────────────────────────────────────────────────────────────
 @cl.action_callback("feedback_negative")
 async def on_negative(action: cl.Action):
