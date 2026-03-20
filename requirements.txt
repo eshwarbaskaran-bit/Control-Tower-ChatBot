@@ -6,6 +6,8 @@ langchain-huggingface
 langchain-experimental
 langchain-community
 langchain-classic
+langgraph
+pandas
 asyncpg
 python-dotenv
 sentence-transformers

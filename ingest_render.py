@@ -1,15 +1,26 @@
+"""
+ingest_render.py
+────────────────
+Ingests data.txt into PGVector using the custom structure-aware splitter.
+
+Replaces semantic chunking with marker-based splitting so each widget entry,
+how-to block, and worked example stays as one atomic chunk.
+
+Usage:
+    python ingest_render.py
+"""
+
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
-from langchain_community.document_loaders import TextLoader
-from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres import PGVector
+from graph.splitter import split_control_tower_docs
 
-# ── Lightweight embeddings — matches agent_render.py ─────────────────────────
+# ── Lightweight embeddings — matches agent_graph.py ──────────────────────────
 print("🧠 Loading MiniLM embeddings...")
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
@@ -19,22 +30,30 @@ embeddings = HuggingFaceEmbeddings(
 # ── Load data.txt ─────────────────────────────────────────────────────────────
 data_path = Path(__file__).parent / "data.txt"
 print(f"📄 Loading {data_path}...")
-loader = TextLoader(str(data_path), encoding="utf-8")
-documents = loader.load()
+text = data_path.read_text(encoding="utf-8")
 
-# ── Semantic chunking ─────────────────────────────────────────────────────────
-print("✂️  Semantic chunking...")
-splitter = SemanticChunker(
-    embeddings,
-    breakpoint_threshold_type="percentile",
-    breakpoint_threshold_amount=70,
-)
-chunks = splitter.split_documents(documents)
+# ── Structure-aware chunking ─────────────────────────────────────────────────
+print("✂️  Splitting by document structure (sections, widgets, how-tos)...")
+chunks = split_control_tower_docs(text)
 print(f"📦 {len(chunks)} chunks created")
 
-# ── Push to Supabase ──────────────────────────────────────────────────────────
-print("🧠 Generating MiniLM embeddings → PostgreSQL...")
-CONNECTION_STRING = os.environ["DATABASE_URL"]
+# Show chunk breakdown by type
+from collections import Counter
+type_counts = Counter(c.metadata["block_type"] for c in chunks)
+for btype, count in sorted(type_counts.items()):
+    print(f"    {btype}: {count}")
+
+# Preview first few chunks
+print("\n📋 First 5 chunks preview:")
+for i, chunk in enumerate(chunks[:5]):
+    meta = chunk.metadata
+    preview = chunk.page_content[:100].replace("\n", " ")
+    print(f"  [{i+1}] [{meta['block_type']}] {meta['block_title']}")
+    print(f"       {preview}...")
+
+# ── Push to database ──────────────────────────────────────────────────────────
+print("\n🧠 Generating MiniLM embeddings → PostgreSQL...")
+CONNECTION_STRING = os.environ["BOT_DB_URL"]
 
 db = PGVector.from_documents(
     documents=chunks,
@@ -45,5 +64,4 @@ db = PGVector.from_documents(
     use_jsonb=True,
 )
 
-print(f"✅ Ingestion complete. {len(chunks)} semantic chunks stored in control_tower_docs_minilm.")
-print("💡 If chunk quality looks off, tune breakpoint_threshold_amount (try 75–90).")
+print(f"\n✅ Ingestion complete. {len(chunks)} structured chunks stored in control_tower_docs_minilm.")
